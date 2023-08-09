@@ -15,7 +15,7 @@
 import sys
 from platform import system
 from os import makedirs
-from os.path import isdir, join
+from os.path import isdir, join, splitext
 
 from SCons.Script import (ARGUMENTS, COMMAND_LINE_TARGETS, AlwaysBuild,
                           Builder, Default, DefaultEnvironment)
@@ -100,10 +100,13 @@ else:
     if "zephyr" in frameworks and "mcuboot-image" in COMMAND_LINE_TARGETS:
         target_firm = env.MCUbootImage(
             join("$BUILD_DIR", "${PROGNAME}.mcuboot.bin"), target_firm)
+    target_hex = env.ElfToHex(join("$BUILD_DIR", "${PROGNAME}"), target_elf)
     env.Depends(target_firm, "checkprogsize")
 
 AlwaysBuild(env.Alias("nobuild", target_firm))
 target_buildprog = env.Alias("buildprog", target_firm, target_firm)
+
+upload_source = target_firm
 
 #
 # Target: Print binary size
@@ -121,6 +124,15 @@ AlwaysBuild(target_size)
 upload_protocol = env.subst("$UPLOAD_PROTOCOL")
 upload_actions = []
 
+# hex file has offsets in it. use bin if offset specified, otherwise hex
+if not board.get("upload.offset_address", None):
+    upload_source = target_hex
+
+# look for signed version
+if "signed" in upload_protocol:
+    base, ext = splitext(str(upload_source[0]))
+    upload_source = env.File(f'{base}.signed{ext}')
+
 if upload_protocol == "mbed":
     upload_actions = [
         env.VerboseAction(env.AutodetectUploadPort, "Looking for upload disk..."),
@@ -136,8 +148,8 @@ elif upload_protocol.startswith("jlink"):
         script_path = join(build_dir, "upload.jlink")
         commands = [
             "h",
-            "loadbin %s, %s" % (source, board.get(
-                "upload.offset_address", "0x0")),
+            "loadfile %s, %s" % (source, board.get(
+                "upload.offset_address", "")),
             "r",
             "q"
         ]
@@ -225,10 +237,11 @@ elif upload_protocol == "custom":
 if not upload_actions:
     sys.stderr.write("Warning! Unknown upload protocol %s\n" % upload_protocol)
 
-AlwaysBuild(env.Alias("upload", target_firm, upload_actions))
+AlwaysBuild(env.Alias("upload", upload_source, upload_actions))
 
 #
 # Default targets
 #
 
-Default([target_buildprog, target_size])
+Default([target_buildprog, target_size, target_hex])
+
